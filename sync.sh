@@ -86,11 +86,11 @@ pihole_add() {
 }
 
 pihole_cleanup_domain() {
-  # Delete any A records for this domain that don't match TARGET_IP
   hosts=$(curl -s $CURL_OPTS "${PIHOLE_URL}/api/config/dns/hosts?sid=${PIHOLE_SID}" 2>/dev/null)
-  echo "$hosts" | grep -o '"[^"]*'"$1"'"' | tr -d '"' | while read -r entry; do
-    entry_ip=$(echo "$entry" | sed "s/ $1//")
-    if [ "$entry_ip" != "${TARGET_IP}" ]; then
+  echo "$hosts" | grep -o '"[^"]*"' | tr -d '"' | while read -r entry; do
+    entry_domain=$(echo "$entry" | sed 's/^[^ ]* //')
+    entry_ip=$(echo "$entry" | sed 's/ .*//')
+    if [ "$entry_domain" = "$1" ] && [ "$entry_ip" != "${TARGET_IP}" ]; then
       encoded=$(printf '%s' "$entry" | sed 's/ /%20/g')
       curl -s $CURL_OPTS -o /dev/null -X DELETE \
         "${PIHOLE_URL}/api/config/dns/hosts/${encoded}?sid=${PIHOLE_SID}" 2>/dev/null || true
