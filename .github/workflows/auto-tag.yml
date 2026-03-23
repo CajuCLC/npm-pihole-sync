@@ -1,0 +1,59 @@
+name: Auto Tag
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'Dockerfile'
+      - 'sync.sh'
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PAT_TOKEN }}
+          persist-credentials: true
+
+      - name: Get latest tag
+        id: latest
+        run: |
+          tag=$(git tag -l 'v*' --sort=-v:refname | head -1)
+          echo "tag=${tag:-v0.0.0}" >> "$GITHUB_OUTPUT"
+
+      - name: Bump version
+        id: bump
+        run: |
+          tag="${{ steps.latest.outputs.tag }}"
+          major=$(echo "$tag" | sed 's/v//' | cut -d. -f1)
+          minor=$(echo "$tag" | sed 's/v//' | cut -d. -f2)
+          patch=$(echo "$tag" | sed 's/v//' | cut -d. -f3)
+
+          # Check merge commit message for version hint
+          msg=$(git log -1 --pretty=%B)
+
+          if echo "$msg" | grep -qi '\[major\]'; then
+            major=$((major + 1)); minor=0; patch=0
+          elif echo "$msg" | grep -qi '\[minor\]'; then
+            minor=$((minor + 1)); patch=0
+          else
+            patch=$((patch + 1))
+          fi
+
+          echo "new_tag=v${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
+
+      - name: Create tag
+        run: |
+          git tag ${{ steps.bump.outputs.new_tag }}
+          git push origin ${{ steps.bump.outputs.new_tag }}
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.bump.outputs.new_tag }}
+          generate_release_notes: true

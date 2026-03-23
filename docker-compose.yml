@@ -1,0 +1,30 @@
+services:
+  npm:
+    image: jc21/nginx-proxy-manager:latest
+    container_name: npm
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "81:81"
+    volumes:
+      - npm_data:/data
+      - npm_letsencrypt:/etc/letsencrypt
+
+  npm-pihole-sync:
+    image: ghcr.io/cajuclc/npm-pihole-sync:latest
+    container_name: npm-pihole-sync
+    restart: unless-stopped
+    environment:
+      NPM_URL: http://npm:81
+      NPM_EMAIL: your-npm-email
+      NPM_PASSWORD: your-npm-password
+      PIHOLE_URL: http://YOUR_PIHOLE_IP
+      PIHOLE_PASSWORD: your-pihole-password
+      TARGET_IP: YOUR_NPM_IP
+      SYNC_INTERVAL: "60"
+      SKIP_TLS_VERIFY: "false"
+
+volumes:
+  npm_data:
+  npm_letsencrypt:
