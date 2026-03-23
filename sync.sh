@@ -64,6 +64,8 @@ pihole_auth() {
 # --- Pi-hole DNS ---
 pihole_add() {
   if is_synced "$1"; then return; fi
+  # Remove any existing records for this domain with wrong IP
+  pihole_cleanup_domain "$1"
   encoded=$(printf '%s' "${TARGET_IP} $1" | sed 's/ /%20/g')
   response=$(curl -s $CURL_OPTS -w '\n%{http_code}' -X PUT \
     "${PIHOLE_URL}/api/config/dns/hosts/${encoded}?sid=${PIHOLE_SID}" 2>/dev/null)
@@ -75,14 +77,6 @@ pihole_add() {
   if [ "$status" = "201" ]; then
     log "Added DNS: $1 -> ${TARGET_IP}"
   elif echo "$body" | grep -q "already present"; then
-    # Check if existing record has correct IP
-    existing=$(curl -s $CURL_OPTS "${PIHOLE_URL}/api/config/dns/hosts?sid=${PIHOLE_SID}" 2>/dev/null)
-    if ! echo "$existing" | grep -q "\"${TARGET_IP} $1\""; then
-      # Wrong IP — delete old and re-add
-      pihole_delete_domain "$1"
-      pihole_add "$1"
-      return
-    fi
     log "Exists DNS: $1"
   else
     log "WARN: DNS HTTP ${status} for $1: ${body}"
@@ -91,15 +85,18 @@ pihole_add() {
   mark_synced "$1"
 }
 
-pihole_delete_domain() {
-  # Delete any A record for this domain regardless of IP
+pihole_cleanup_domain() {
+  # Delete any A records for this domain that don't match TARGET_IP
   hosts=$(curl -s $CURL_OPTS "${PIHOLE_URL}/api/config/dns/hosts?sid=${PIHOLE_SID}" 2>/dev/null)
-  echo "$hosts" | grep -o "[^ ]*$1" | while read -r entry; do
-    encoded=$(printf '%s' "$entry" | sed 's/ /%20/g')
-    curl -s $CURL_OPTS -o /dev/null -X DELETE \
-      "${PIHOLE_URL}/api/config/dns/hosts/${encoded}?sid=${PIHOLE_SID}" 2>/dev/null || true
+  echo "$hosts" | grep -o '"[^"]*'"$1"'"' | tr -d '"' | while read -r entry; do
+    entry_ip=$(echo "$entry" | sed "s/ $1//")
+    if [ "$entry_ip" != "${TARGET_IP}" ]; then
+      encoded=$(printf '%s' "$entry" | sed 's/ /%20/g')
+      curl -s $CURL_OPTS -o /dev/null -X DELETE \
+        "${PIHOLE_URL}/api/config/dns/hosts/${encoded}?sid=${PIHOLE_SID}" 2>/dev/null || true
+      log "Removed old DNS: $1 -> $entry_ip"
+    fi
   done
-  log "Deleted old DNS for: $1"
 }
 
 pihole_remove_stale() {
