@@ -98,14 +98,6 @@ pihole_cleanup_domain() {
     fi
   done
 }
-  hosts=$(curl -s $CURL_OPTS "${PIHOLE_URL}/api/config/dns/hosts?sid=${PIHOLE_SID}" 2>/dev/null)
-  echo "$hosts" | grep -o "[^ ]*$1" | while read -r entry; do
-    encoded=$(printf '%s' "$entry" | sed 's/ /%20/g')
-    curl -s $CURL_OPTS -o /dev/null -X DELETE \
-      "${PIHOLE_URL}/api/config/dns/hosts/${encoded}?sid=${PIHOLE_SID}" 2>/dev/null || true
-  done
-  log "Deleted old DNS for: $1"
-}
 
 pihole_remove_stale() {
   current_domains="$1"
