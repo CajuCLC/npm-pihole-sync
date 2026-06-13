@@ -40,12 +40,35 @@ npm_auth() {
 }
 
 # --- NPM Get Proxy Hosts ---
+# Echoes domains to stdout. Returns 0 on a valid 200 response, 1 on failure.
 npm_get_domains() {
-  curl -s $CURL_OPTS -X GET "${NPM_URL}/api/nginx/proxy-hosts" \
-    -H "Authorization: Bearer ${NPM_TOKEN}" 2>/dev/null \
+  response=$(curl -s $CURL_OPTS -w '\n%{http_code}' -X GET "${NPM_URL}/api/nginx/proxy-hosts" \
+    -H "Authorization: Bearer ${NPM_TOKEN}" 2>/dev/null)
+  status=$(echo "$response" | tail -1)
+  body=$(echo "$response" | sed '$d')
+
+  # Token expired or unauthorized — re-auth and retry once
+  if [ "$status" = "401" ] || [ "$status" = "403" ]; then
+    log "NPM token expired, re-authenticating..." >&2
+    if npm_auth >&2; then
+      response=$(curl -s $CURL_OPTS -w '\n%{http_code}' -X GET "${NPM_URL}/api/nginx/proxy-hosts" \
+        -H "Authorization: Bearer ${NPM_TOKEN}" 2>/dev/null)
+      status=$(echo "$response" | tail -1)
+      body=$(echo "$response" | sed '$d')
+    fi
+  fi
+
+  # Only a clean 200 is valid; anything else is transient (502, etc.)
+  if [ "$status" != "200" ]; then
+    log "WARN: NPM returned HTTP ${status}" >&2
+    return 1
+  fi
+
+  echo "$body" \
     | sed 's/\[{/\n{/g' \
     | grep -o '"domain_names":\[[^]]*\]' \
     | sed 's/"domain_names":\[//; s/\]//; s/"//g; s/,/\n/g'
+  return 0
 }
 
 # --- Pi-hole Auth ---
@@ -115,6 +138,12 @@ pihole_remove_stale() {
 # --- Sync ---
 sync_all() {
   domains=$(npm_get_domains)
+
+  # Fetch failed (auth/transient error) — skip this cycle, don't touch Pi-hole
+  if [ $? -ne 0 ]; then
+    return
+  fi
+
   if [ -z "$domains" ]; then
     log "No proxy hosts found in NPM"
     return
