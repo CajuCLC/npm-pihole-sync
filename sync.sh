@@ -40,34 +40,27 @@ npm_auth() {
 }
 
 # --- NPM Get Proxy Hosts ---
-# Echoes domains to stdout. Returns 0 on a valid 200 response, 1 on failure.
-npm_get_domains() {
+# Writes domains to NPM_DOMAINS_FILE. Returns 0 on success, 1 on auth error, 2 on transient error.
+NPM_DOMAINS_FILE="/tmp/npm_domains"
+npm_fetch_domains() {
   response=$(curl -s $CURL_OPTS -w '\n%{http_code}' -X GET "${NPM_URL}/api/nginx/proxy-hosts" \
     -H "Authorization: Bearer ${NPM_TOKEN}" 2>/dev/null)
   status=$(echo "$response" | tail -1)
   body=$(echo "$response" | sed '$d')
 
-  # Token expired or unauthorized — re-auth and retry once
-  if [ "$status" = "401" ] || [ "$status" = "403" ]; then
-    log "NPM token expired, re-authenticating..." >&2
-    if npm_auth >&2; then
-      response=$(curl -s $CURL_OPTS -w '\n%{http_code}' -X GET "${NPM_URL}/api/nginx/proxy-hosts" \
-        -H "Authorization: Bearer ${NPM_TOKEN}" 2>/dev/null)
-      status=$(echo "$response" | tail -1)
-      body=$(echo "$response" | sed '$d')
-    fi
+  if [ "$status" = "401" ] || [ "$status" = "403" ] || [ "$status" = "400" ]; then
+    return 1
   fi
 
-  # Only a clean 200 is valid; anything else is transient (502, etc.)
   if [ "$status" != "200" ]; then
-    log "WARN: NPM returned HTTP ${status}" >&2
-    return 1
+    log "WARN: NPM returned HTTP ${status}"
+    return 2
   fi
 
   echo "$body" \
     | sed 's/\[{/\n{/g' \
     | grep -o '"domain_names":\[[^]]*\]' \
-    | sed 's/"domain_names":\[//; s/\]//; s/"//g; s/,/\n/g'
+    | sed 's/"domain_names":\[//; s/\]//; s/"//g; s/,/\n/g' > "$NPM_DOMAINS_FILE"
   return 0
 }
 
@@ -137,12 +130,20 @@ pihole_remove_stale() {
 
 # --- Sync ---
 sync_all() {
-  domains=$(npm_get_domains)
-
-  # Fetch failed (auth/transient error) — skip this cycle, don't touch Pi-hole
-  if [ $? -ne 0 ]; then
+  # Try to fetch; re-auth in main shell if token expired
+  npm_fetch_domains
+  rc=$?
+  if [ $rc -eq 1 ]; then
+    log "NPM token expired, re-authenticating..."
+    npm_auth || { log "ERROR: Could not re-auth with NPM"; return; }
+    npm_fetch_domains
+    rc=$?
+  fi
+  if [ $rc -ne 0 ]; then
     return
   fi
+
+  domains=$(cat "$NPM_DOMAINS_FILE" 2>/dev/null)
 
   if [ -z "$domains" ]; then
     log "No proxy hosts found in NPM"
